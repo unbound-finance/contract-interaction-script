@@ -1,7 +1,31 @@
 const axios = require('axios')
 const dayjs = require('dayjs')
 const ethers = require('ethers')
-const UniswapLPTABI = require('./abi/UniswapLPT')
+const UniswapLPTABI = [  {
+    "constant": true,
+    "inputs": [],
+    "name": "getReserves",
+    "outputs": [
+       {
+          "internalType": "uint112",
+          "name": "_reserve0",
+          "type": "uint112"
+       },
+       {
+          "internalType": "uint112",
+          "name": "_reserve1",
+          "type": "uint112"
+       },
+       {
+          "internalType": "uint32",
+          "name": "_blockTimestampLast",
+          "type": "uint32"
+       }
+    ],
+    "payable": false,
+    "stateMutability": "view",
+    "type": "function"
+  }]
 
 const mnemonic = 'gallery cinnamon equal inform lend perfect kitchen grab today width eager thank'
 const infuraKey = 'a4dcdfe968254cd4a2a30381e3558541'
@@ -39,71 +63,69 @@ const getPairsData = async (pair, fromDate, uptoDays) => {
         let totalVolume = 0;
         for (i = 0; i < dailyData.length; i++) {
             const date = dayjs.unix(dailyData[i].date)
-            // console.log(date.format(), dailyData[i].dailyVolumeUSD)
             totalVolume += parseFloat(dailyData[i].dailyVolumeUSD)
         }
         console.log('totalFees', totalVolume * 0.3 / 100)
         return totalVolume * 0.3 / 100
-        // console.log(`Total Volume in ${dailyData.length} days`, totalVolume)
-        // console.log('Total Fees Collected in Last 30 Days', totalVolume * 0.3 / 100)
     } catch (error) {
         console.log(error)
     }
 }
 
-// const getNetValue = async (pair, fromDate, uptoDays) => {
-//     const totalFees = await getPairsData(pair, fromDate, uptoDays)
-//     // const pairContract = new ethers.Contract(pair, UniswapLPTABI, signer)
-//     const impermenentLoss =  2.23
-//     const liquidiyValue = 200 // provided liquidity value in terms of USD
-//     const lossPercentage = 30 // expected loss percentage
-//     const poolPercentage = 2 // pool share of the user in percent
-
-//     const fees = parseFloat(totalFees) * poolPercentage/100
-
-//     const netValue = liquidiyValue - (liquidiyValue * lossPercentage)/200 - impermenentLoss/100 + fees
-//     console.log('netValue', netValue) 
-// }
+const getAverageFees = async() => {
+    const today = dayjs()
+    const uniswapLaunchDate = 1589846400
+    const date = dayjs.unix(uniswapLaunchDate)
+    const numberOfDays = today.diff(date, "days")
+    const getTotalFees = await getPairsData('0xa478c2975ab1ea89e8196811f51a7b7ade33eb11', uniswapLaunchDate, numberOfDays)
+    return getTotalFees/numberOfDays
+}
 
 
-const getNetValue = async (pair, stablecoinAmt, secondAssetAmount, fromDate, uptoDays, stablecoinPosition, lossPercentage, impermenentLoss) => {
 
-    // get total fees accrued on whole pool
-    const totalFees = await getPairsData(pair, fromDate, uptoDays)
+const getNetValue = async (pair, stablecoinAmt, lossPercentage, days) => {
 
     const pairContract = new ethers.Contract(pair, UniswapLPTABI, signer)
-
-
-    // hardcoding LTV for now
-    const LTV = 30 // in percent
-
     // calculate pool share
     const reserves = await pairContract.getReserves()
     const totalPoolValue = (parseInt(reserves._reserve0) * 2) / 1e18 // get total pool share
 
     const usersPoolValue = stablecoinAmt * 2
-    console.log(usersPoolValue * 30/100)
+
+     // get impermenent loss
+    const getImpLoss = await getImpermenentLoss(usersPoolValue, lossPercentage)
+
+    const impLoss = usersPoolValue * getImpLoss / 100
+
+    const averageFees = await getAverageFees()
+
+    // get average fees and multiple
+    const totalFees = averageFees * days
 
     const usersPoolShare = (usersPoolValue / totalPoolValue) * 100
 
     const fees = parseFloat(totalFees) * usersPoolShare / 100
 
-    const impLoss = usersPoolValue * impermenentLoss / 100
-
-    const netPoolValue = usersPoolValue - ((usersPoolValue * lossPercentage) / 200) - impLoss + fees
+    const netPoolValue = usersPoolValue + ((usersPoolValue * lossPercentage) / 200) - impLoss + fees
 
     console.log({
         'Users Pool Value (in USD)': usersPoolValue,
         'Users Pool Share (in %)': usersPoolShare,
-        'Loan to Value Ratio (in %)': LTV,
         'Fees Earned by User': fees,
         'If one asset down by (in %)': lossPercentage,
-        'Impermanent Loss': impermenentLoss,
-        'Loan Given (in USD)': usersPoolValue * LTV/100,
+        'Impermanent Loss': impLoss,
         'Net Value': netPoolValue,
-        'Need to Liquidate?': netPoolValue < usersPoolValue * LTV/100 ? ' 😞 YES' : '😃 NO'
     })
 
 }
 
-getNetValue('0xa478c2975ab1ea89e8196811f51a7b7ade33eb11', '4000000', '10000', 1598918400, 100, 1, 125, 7.69)
+const getImpermenentLoss = async (totalValue, percentage) => {
+        const remainingValue = totalValue + percentage
+        const priceRatio = (100 + percentage) / 100
+        const numerator = Math.sqrt(priceRatio) * 2
+        const denominator = 1 + priceRatio
+        const impLoss = remainingValue * numerator / denominator;
+        return 100 - (impLoss / remainingValue) * 100
+}
+
+getNetValue('0xa478c2975ab1ea89e8196811f51a7b7ade33eb11', '200', -50, 30)
